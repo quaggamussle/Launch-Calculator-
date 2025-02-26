@@ -29,50 +29,62 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // Initialize map with a default center
+        // Static ZIP fallback if API fails
+        const zipFallback = {
+            "32780": { lat: 28.5623, lon: -80.8075 },
+            "90254": { lat: 33.8658, lon: -118.3995 }
+        };
+
+        // Initialize map
         const map = L.map('map').setView([28.5721, -80.6490], 6);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
-        // Fetch ZIP code coordinates from Zipcodebase API
+        // Fetch ZIP coordinates from Zipcodebase API with fallback
         async function getCoordsFromZip(zip) {
             try {
                 console.log(`Fetching coordinates for ZIP: ${zip}`);
                 const response = await fetch(`https://app.zipcodebase.com/api/v1/search?codes=${zip}&country=us`);
-                if (!response.ok) {
-                    throw new Error(`Zipcodebase API error: ${response.status} - ${response.statusText}`);
-                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 console.log('Zipcodebase response:', data);
-                if (!data.results || !data.results[zip] || data.results[zip].length === 0) {
-                    throw new Error('No results found for this ZIP code');
-                }
                 const result = data.results[zip][0];
                 return { lat: result.latitude, lon: result.longitude };
             } catch (error) {
-                console.error('ZIP code fetch error:', error.message);
+                console.error('ZIP fetch error:', error.message);
+                if (zipFallback[zip]) {
+                    console.log(`Using fallback for ZIP ${zip}:`, zipFallback[zip]);
+                    return zipFallback[zip];
+                }
                 return null;
             }
         }
 
-        // Fetch upcoming SpaceX launches from SpaceX API
+        // Fetch next SpaceX launch with fallback to past launches
         async function fetchLaunches() {
             try {
-                console.log('Fetching SpaceX upcoming launches');
-                const response = await fetch('https://api.spacexdata.com/v5/launches/upcoming');
-                if (!response.ok) {
-                    throw new Error(`SpaceX API error: ${response.status} - ${response.statusText}`);
+                console.log('Fetching next SpaceX launch');
+                let response = await fetch('https://api.spacexdata.com/v5/launches/next');
+                if (!response.ok) throw new Error(`Next launch HTTP ${response.status}`);
+                let data = await response.json();
+                console.log('SpaceX next response:', data);
+                if (!data || Object.keys(data).length === 0) {
+                    console.log('No next launch, fetching upcoming launches');
+                    response = await fetch('https://api.spacexdata.com/v5/launches/upcoming');
+                    data = await response.json();
+                    console.log('SpaceX upcoming response:', data);
                 }
-                const data = await response.json();
-                console.log('SpaceX API response:', data);
-                if (data.length === 0) {
-                    console.warn('No upcoming launches returned from SpaceX API');
-                    return [];
+                if (!data || (Array.isArray(data) && data.length === 0)) {
+                    console.log('No upcoming launches, fetching past launch as fallback');
+                    response = await fetch('https://api.spacexdata.com/v5/launches/past?limit=1');
+                    data = await response.json();
+                    console.log('SpaceX past response:', data);
                 }
-                return data.map(launch => ({
+                const launches = Array.isArray(data) ? data : [data];
+                return launches.map(launch => ({
                     company: "SpaceX",
-                    vehicle: "Falcon 9", // Assuming Falcon 9
+                    vehicle: "Falcon 9",
                     mission: launch.name,
                     date: launch.date_utc.split('T')[0],
                     time: launch.date_utc.split('T')[1].slice(0, 5),
@@ -82,12 +94,12 @@
                     timezone: getTimezone(launch.launchpad.name)
                 }));
             } catch (error) {
-                console.error('SpaceX API fetch error:', error.message);
+                console.error('SpaceX fetch error:', error.message);
                 return [];
             }
         }
 
-        // Estimate azimuth based on mission or launch site
+        // Estimate azimuth
         function estimateAzimuth(launch) {
             const mission = launch.name;
             const site = launch.launchpad.name;
@@ -104,7 +116,7 @@
             return 0;
         }
 
-        // Map SpaceX launchpad to timezone
+        // Map timezone
         function getTimezone(launchpadName) {
             if (launchpadName.includes("Kennedy") || launchpadName.includes("Cape Canaveral")) return "EST";
             if (launchpadName.includes("Vandenberg")) return "PST";
@@ -112,14 +124,13 @@
             return "UTC";
         }
 
-        // Populate launch options dynamically
+        // Populate launch options
         async function updateLaunchOptions() {
             const launches = await fetchLaunches();
             const launchSelect = document.getElementById('launchOption');
             launchSelect.innerHTML = '';
             if (launches.length === 0) {
-                launchSelect.innerHTML = '<option>No upcoming SpaceX launches found</option>';
-                console.warn('No launches available to display');
+                launchSelect.innerHTML = '<option>No SpaceX launches available</option>';
                 return;
             }
             launches.forEach(data => {
@@ -132,7 +143,7 @@
         }
         updateLaunchOptions();
 
-        // Calculate intermediate points along a great-circle arc
+        // Calculate flight path arc
         function calculateArcPoints(startLat, startLon, azimuth, totalDistance, numPoints) {
             const R = 6371;
             const points = [];
@@ -181,7 +192,7 @@
             return points;
         }
 
-        // Simplified Falcon 9 ascent profile
+        // Falcon 9 ascent profile
         const ascentProfile = [
             { time: 0, altitude: 0 },
             { time: 30, altitude: 5 },
@@ -192,7 +203,7 @@
             { time: 180, altitude: 200 }
         ];
 
-        // Calculate T+ with Earth's curvature
+        // Calculate T+
         function calculateTPlus(distance, azimuth, userLat, userLon, launchLat, launchLon) {
             const R = 6371;
             const milesPerKm = 0.621371;
