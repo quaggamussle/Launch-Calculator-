@@ -29,8 +29,8 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // Initialize map with a default center (will adjust dynamically)
-        const map = L.map('map').setView([28.5721, -80.6490], 6); // Default: KSC
+        // Initialize map with a default center
+        const map = L.map('map').setView([28.5721, -80.6490], 6);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
@@ -38,12 +38,20 @@
         // Fetch ZIP code coordinates from Zipcodebase API
         async function getCoordsFromZip(zip) {
             try {
+                console.log(`Fetching coordinates for ZIP: ${zip}`);
                 const response = await fetch(`https://app.zipcodebase.com/api/v1/search?codes=${zip}&country=us`);
+                if (!response.ok) {
+                    throw new Error(`Zipcodebase API error: ${response.status} - ${response.statusText}`);
+                }
                 const data = await response.json();
+                console.log('Zipcodebase response:', data);
+                if (!data.results || !data.results[zip] || data.results[zip].length === 0) {
+                    throw new Error('No results found for this ZIP code');
+                }
                 const result = data.results[zip][0];
                 return { lat: result.latitude, lon: result.longitude };
             } catch (error) {
-                console.error('ZIP code fetch error:', error);
+                console.error('ZIP code fetch error:', error.message);
                 return null;
             }
         }
@@ -51,21 +59,30 @@
         // Fetch upcoming SpaceX launches from SpaceX API
         async function fetchLaunches() {
             try {
+                console.log('Fetching SpaceX upcoming launches');
                 const response = await fetch('https://api.spacexdata.com/v5/launches/upcoming');
+                if (!response.ok) {
+                    throw new Error(`SpaceX API error: ${response.status} - ${response.statusText}`);
+                }
                 const data = await response.json();
+                console.log('SpaceX API response:', data);
+                if (data.length === 0) {
+                    console.warn('No upcoming launches returned from SpaceX API');
+                    return [];
+                }
                 return data.map(launch => ({
                     company: "SpaceX",
-                    vehicle: "Falcon 9", // Assuming Falcon 9 for simplicity
+                    vehicle: "Falcon 9", // Assuming Falcon 9
                     mission: launch.name,
                     date: launch.date_utc.split('T')[0],
-                    time: launch.date_utc.split('T')[1].slice(0, 5), // UTC time
+                    time: launch.date_utc.split('T')[1].slice(0, 5),
                     azimuth: estimateAzimuth(launch),
                     launchLat: launch.launchpad.latitude,
                     launchLon: launch.launchpad.longitude,
                     timezone: getTimezone(launch.launchpad.name)
                 }));
             } catch (error) {
-                console.error('SpaceX API fetch error:', error);
+                console.error('SpaceX API fetch error:', error.message);
                 return [];
             }
         }
@@ -75,16 +92,16 @@
             const mission = launch.name;
             const site = launch.launchpad.name;
             if (site.includes("Kennedy") || site.includes("Cape Canaveral")) {
-                if (mission.includes("Crew") || mission.includes("Dragon")) return 90; // East for ISS
-                if (mission.includes("Starlink")) return 40; // NE for polar
-                return 135; // SE default
+                if (mission.includes("Crew") || mission.includes("Dragon")) return 90;
+                if (mission.includes("Starlink")) return 40;
+                return 135;
             } else if (site.includes("Vandenberg")) {
-                if (mission.includes("Starlink")) return 180; // South for polar
-                return 225; // SW default
+                if (mission.includes("Starlink")) return 180;
+                return 225;
             } else if (site.includes("Starbase")) {
-                return 90; // East default for Texas
+                return 90;
             }
-            return 0; // Fallback
+            return 0;
         }
 
         // Map SpaceX launchpad to timezone
@@ -92,7 +109,7 @@
             if (launchpadName.includes("Kennedy") || launchpadName.includes("Cape Canaveral")) return "EST";
             if (launchpadName.includes("Vandenberg")) return "PST";
             if (launchpadName.includes("Starbase")) return "CST";
-            return "UTC"; // Fallback
+            return "UTC";
         }
 
         // Populate launch options dynamically
@@ -102,6 +119,7 @@
             launchSelect.innerHTML = '';
             if (launches.length === 0) {
                 launchSelect.innerHTML = '<option>No upcoming SpaceX launches found</option>';
+                console.warn('No launches available to display');
                 return;
             }
             launches.forEach(data => {
@@ -110,8 +128,9 @@
                 option.text = `${data.company}, ${data.vehicle}, ${data.mission}, ${data.date} ${data.time}, ${data.azimuth}°`;
                 launchSelect.appendChild(option);
             });
+            console.log('Launch options populated:', launches);
         }
-        updateLaunchOptions(); // Initial load
+        updateLaunchOptions();
 
         // Calculate intermediate points along a great-circle arc
         function calculateArcPoints(startLat, startLon, azimuth, totalDistance, numPoints) {
@@ -207,6 +226,7 @@
         // Main calculation function
         async function calculateVisibility() {
             const userZip = document.getElementById('userZip').value.trim();
+            console.log(`Calculating visibility for ZIP: ${userZip}`);
             const coords = await getCoordsFromZip(userZip);
             if (!coords) {
                 document.getElementById('result').innerHTML = "Invalid or unsupported ZIP code. Please enter a valid 5-digit U.S. ZIP code.";
@@ -220,13 +240,13 @@
             const vehicle = launchData.vehicle;
             const mission = launchData.mission;
             const launchDate = launchData.date;
-            const launchTime = launchData.time; // UTC
+            const launchTime = launchData.time;
             const launchAzimuth = launchData.azimuth;
             const launchLat = launchData.launchLat;
             const launchLon = launchData.launchLon;
             const timezone = launchData.timezone;
 
-            // Convert UTC to local time (simplified, no DST)
+            // Convert UTC to local time
             const utcDate = new Date(`${launchDate}T${launchTime}Z`);
             const offset = timezone === "EST" ? -5 : timezone === "PST" ? -8 : timezone === "CST" ? -6 : 0;
             utcDate.setHours(utcDate.getHours() + offset);
@@ -282,6 +302,7 @@
                               `Distance to launch site: ${distance.toFixed(1)} km<br>` +
                               `Estimated viewing duration: ${duration} minutes`;
             document.getElementById('result').innerHTML = resultText;
+            console.log('Calculation completed:', { userLat, userLon, distance, tPlusText });
 
             // Update map
             map.eachLayer(layer => { if (layer instanceof L.Marker || layer instanceof L.Polyline || layer instanceof L.CircleMarker) map.removeLayer(layer); });
